@@ -1,153 +1,49 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#0b0d12" />
-  <title>Babashop — Sleeper Basketball Analytics</title>
-  <meta name="description" content="Simple Sleeper fantasy basketball analytics for the Babashop league." />
-  <link rel="stylesheet" href="styles.css" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="theme-color" content="#090b10">
+  <title>Babashop — Fantasy Basketball Analytics</title>
+  <link rel="stylesheet" href="styles.css?v=20260906-03">
 </head>
-<body>
+<body data-page="home" class="loading">
   <div class="app-shell">
-    <header class="hero">
-      <div class="hero-copy">
-        <div class="eyebrow">Sleeper fantasy basketball</div>
-        <div class="league-heading">
-          <img id="leagueAvatar" class="league-avatar hidden" alt="" />
-          <div>
-            <h1 id="leagueName">Babashop Analytics</h1>
-            <p id="leagueMeta" class="muted">Loading league data…</p>
-          </div>
-        </div>
-      </div>
-      <div class="hero-actions">
-        <button id="refreshButton" class="button button-secondary" type="button">Refresh</button>
-        <a id="sleeperLink" class="button" href="https://sleeper.com" target="_blank" rel="noreferrer">Open Sleeper</a>
-      </div>
+    <header class="topbar">
+      <a class="brand" href="index.html?v=20260906-03">Babashop</a>
+      <nav class="nav">
+        <a class="active" href="index.html?v=20260906-03">Home</a>
+        <a href="standings.html?v=20260906-03">Standings</a>
+        <a href="power.html?v=20260906-03">Power</a>
+        <a href="draft.html?v=20260906-03">Draft</a>
+      </nav>
     </header>
-
-    <div id="statusBanner" class="status-banner" role="status">Connecting to Sleeper…</div>
-
-    <main id="dashboard" class="dashboard hidden">
-      <section class="summary-grid" aria-label="League summary">
-        <article class="stat-card">
-          <span class="stat-label">Teams</span>
-          <strong id="teamCount" class="stat-value">—</strong>
-          <span class="stat-note">active rosters</span>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label">Current week</span>
-          <strong id="currentWeek" class="stat-value">—</strong>
-          <span id="weekNote" class="stat-note">Sleeper state</span>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label">Top scorer</span>
-          <strong id="topScorer" class="stat-value stat-value-text">—</strong>
-          <span id="topScorerNote" class="stat-note">season points</span>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label">League average</span>
-          <strong id="leagueAverage" class="stat-value">—</strong>
-          <span class="stat-note">points per team-week</span>
-        </article>
+    <section class="hero compact-hero">
+      <div class="league-heading">
+        <img id="leagueAvatar" class="league-avatar hidden" alt="">
+        <div><div class="eyebrow">Sleeper fantasy basketball</div><h1 id="leagueName">Babashop Analytics</h1><p id="leagueMeta" class="muted">Loading league…</p></div>
+      </div>
+    </section>
+    <div id="statusBanner" class="status-banner">Loading Sleeper data…</div>
+    <main class="dashboard">
+      <section class="summary-grid">
+        <article class="stat-card"><span class="stat-label">Teams</span><strong id="teamCount" class="stat-value">—</strong><span class="stat-note">league size</span></article>
+        <article class="stat-card"><span class="stat-label">Week</span><strong id="currentWeek" class="stat-value">—</strong><span class="stat-note">current scoring period</span></article>
+        <article class="stat-card"><span class="stat-label">Power leader</span><strong id="powerLeader" class="stat-value stat-value-text">—</strong><span id="powerLeaderNote" class="stat-note">current model leader</span></article>
+        <article class="stat-card"><span class="stat-label">League avg</span><strong id="leagueAverage" class="stat-value">—</strong><span class="stat-note">points per team-week</span></article>
       </section>
-
-      <section class="panel-grid panel-grid-wide">
-        <article class="panel">
-          <div class="section-heading">
-            <div>
-              <div class="eyebrow">Table</div>
-              <h2>Standings</h2>
-            </div>
-            <span class="pill">Live</span>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Team</th>
-                  <th>W</th>
-                  <th>L</th>
-                  <th>PF</th>
-                  <th>PA</th>
-                  <th>Diff</th>
-                </tr>
-              </thead>
-              <tbody id="standingsBody"></tbody>
-            </table>
-          </div>
-        </article>
-
-        <article class="panel">
-          <div class="section-heading">
-            <div>
-              <div class="eyebrow">Model</div>
-              <h2>Power rankings</h2>
-            </div>
-            <button id="powerInfoButton" class="icon-button" type="button" aria-label="How power rankings work">?</button>
-          </div>
-          <p id="powerInfo" class="panel-note hidden">Preseason rankings use the draft grade. Once games start, the model shifts to record, scoring, all-play performance and recent form; draft strength fades out over the first few scored weeks.</p>
-          <div id="powerRankings" class="ranking-list"></div>
-        </article>
+      <section class="panel-grid home-grid">
+        <article class="panel"><div class="section-heading"><div><div class="eyebrow">Top 5</div><h2>Power rankings</h2></div><a class="text-link" href="power.html?v=20260906-03">View all →</a></div><div id="powerPreview" class="ranking-list"></div></article>
+        <article class="panel"><div class="section-heading"><div><div class="eyebrow">League</div><h2>Teams</h2></div></div><div id="teamDirectory" class="directory-grid"></div></article>
       </section>
-
-      <section class="panel">
-        <div class="section-heading">
-          <div>
-            <div class="eyebrow">Draft</div>
-            <h2>Draft grades</h2>
-          </div>
-          <button id="draftInfoButton" class="icon-button" type="button" aria-label="How draft grades work">?</button>
-        </div>
-        <p id="draftInfo" class="panel-note hidden">League-relative grades based mostly on draft value versus Sleeper's player-rank signal, with a smaller positional-balance adjustment. Early reaches count more than late reaches. Picks without usable rank data are excluded instead of guessed.</p>
-        <div id="draftGrades" class="ranking-list"></div>
-      </section>
-
-      <section class="panel-grid">
-        <article class="panel">
-          <div class="section-heading section-heading-wrap">
-            <div>
-              <div class="eyebrow">Scoreboard</div>
-              <h2>Weekly matchups</h2>
-            </div>
-            <label class="select-label">
-              <span>Week</span>
-              <select id="weekSelect"></select>
-            </label>
-          </div>
-          <div id="matchups" class="matchup-list"></div>
-        </article>
-
-        <article class="panel">
-          <div class="section-heading">
-            <div>
-              <div class="eyebrow">Season</div>
-              <h2>Superlatives</h2>
-            </div>
-          </div>
-          <div id="superlatives" class="superlative-list"></div>
-        </article>
-      </section>
-
-      <section class="panel">
-        <div class="section-heading">
-          <div>
-            <div class="eyebrow">League</div>
-            <h2>Team pulse</h2>
-          </div>
-        </div>
-        <div id="teamGrid" class="team-grid"></div>
-      </section>
-
-      <footer class="footer">
-        <span>League ID 1401342003886714880</span>
-        <span>Data from Sleeper · analytics calculated in your browser</span>
-      </footer>
+      <details class="panel collapsible-panel"><summary><span><span class="eyebrow">Optional</span><strong>League records</strong></span><span class="summary-hint">Show</span></summary><div id="homeExtras" class="mini-stat-grid details-content"></div></details>
     </main>
+    <footer class="footer">League 1401342003886714880 <span>Build 20260906-03</span></footer>
   </div>
-
-  <script src="app.js" defer></script>
+  <script src="common.js?v=20260906-03" defer></script>
+  <script src="page.js?v=20260906-03" defer></script>
 </body>
 </html>
