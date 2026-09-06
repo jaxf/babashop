@@ -9,12 +9,19 @@ const state = {
   teams: [],
   matchupWeeks: new Map(),
   currentWeek: 0,
+  completedWeeks: [],
+  drafts: [],
+  draft: null,
+  draftPicks: [],
+  playerRanks: {},
+  draftGrades: [],
 };
 
 const el = (id) => document.getElementById(id);
 const number = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const round = (value, digits = 1) => Number(value).toFixed(digits).replace(/\.0$/, '');
 const safeText = (value, fallback = '—') => value === null || value === undefined || value === '' ? fallback : String(value);
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 function avatarUrl(avatarId) {
   return avatarId ? `https://sleepercdn.com/avatars/thumbs/${avatarId}` : '';
@@ -68,6 +75,13 @@ function buildTeams() {
       recentForm: [],
       allPlayWins: 0,
       allPlayGames: 0,
+      allPlayPct: 0,
+      expectedWins: wins,
+      luck: 0,
+      ppg: 0,
+      recentAvg: 0,
+      draftScore: null,
+      draftGrade: null,
       power: 0,
     };
   });
@@ -169,6 +183,187 @@ function normalizedScores(values) {
   return values.map((value) => ((value - min) / (max - min)) * 100);
 }
 
+function draftRosterId(pick) {
+  const direct = number(pick?.roster_id, 0);
+  if (direct) return direct;
+  const slot = String(pick?.draft_slot ?? '');
+  return number(state.draft?.slot_to_roster_id?.[slot], 0);
+}
+
+function draftPlayerName(pick) {
+  const player = state.playerRanks?.[String(pick?.player_id)] || {};
+  const metadata = pick?.metadata || {};
+  const first = player.first_name || metadata.first_name || '';
+  const last = player.last_name || metadata.last_name || '';
+  return `${first} ${last}`.trim() || metadata.full_name || `Player ${pick?.player_id || ''}`.trim();
+}
+
+function draftPlayerRank(pick) {
+  const player = state.playerRanks?.[String(pick?.player_id)] || {};
+  const metadata = pick?.metadata || {};
+  const rank = number(player.search_rank || metadata.search_rank, 0);
+  return rank > 0 ? rank : null;
+}
+
+function draftPlayerPositions(pick) {
+  const player = state.playerRanks?.[String(pick?.player_id)] || {};
+  const metadata = pick?.metadata || {};
+  const positions = player.fantasy_positions || metadata.fantasy_positions || [];
+  if (Array.isArray(positions) && positions.length) return positions.map(String);
+  const position = player.position || metadata.position;
+  return position ? [String(position)] : [];
+}
+
+function loadCachedPlayers() {
+  try {
+    const raw = localStorage.getItem('babashop:nba-player-ranks');
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    if (!cached?.savedAt || Date.now() - cached.savedAt > 24 * 60 * 60 * 1000) return null;
+    return cached.players || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function cachePlayers(players) {
+  try {
+    localStorage.setItem('babashop:nba-player-ranks', JSON.stringify({ savedAt: Date.now(), players }));
+  } catch (_) {
+    // Storage is optional; the dashboard still works without it.
+  }
+}
+
+async function loadPlayerRanks() {
+  const cached = loadCachedPlayers();
+  if (cached) return cached;
+
+  try {
+    const players = await api('/players/nba?active=true');
+    const compact = {};
+    Object.entries(players || {}).forEach(([id, player]) => {
+      compact[id] = {
+        search_rank: player?.search_rank ?? null,
+        first_name: player?.first_name || '',
+        last_name: player?.last_name || '',
+        fantasy_positions: player?.fantasy_positions || [],
+        position: player?.position || '',
+      };
+    });
+    cachePlayers(compact);
+    return compact;
+  } catch (error) {
+    console.warn('Could not load Sleeper NBA player ranks', error);
+    return {};
+  }
+}
+
+async function loadDraftData(initialDrafts = null) {
+  state.drafts = Array.isArray(initialDrafts) ? initialDrafts : [];
+  state.draft = null;
+  state.draftPicks = [];
+  state.playerRanks = {};
+  state.draftGrades = [];
+
+  if (!state.drafts.length) return;
+  const season = String(state.league?.season || '');
+  state.draft = state.drafts.find((draft) => String(draft?.season || '') === season && String(draft?.status || '').toLowerCase() === 'complete')
+    || state.drafts.find((draft) => String(draft?.season || '') === season)
+    || state.drafts[0];
+
+  if (!state.draft?.draft_id) return;
+  try {
+    const [picks, playerRanks] = await Promise.all([
+      api(`/draft/${state.draft.draft_id}/picks`).catch(() => []),
+      loadPlayerRanks(),
+    ]);
+    state.draftPicks = Array.isArray(picks) ? picks : [];
+    state.playerRanks = playerRanks || {};
+    calculateDraftGrades();
+  } catch (error) {
+    console.warn('Could not load draft analytics', error);
+  }
+}
+
+function positionalBalanceScore(picks) {
+  if (!picks.length) return 50;
+  const buckets = { G: 0, F: 0, C: 0 };
+  picks.forEach((pick) => {
+    const positions = draftPlayerPositions(pick);
+    if (positions.some((position) => /PG|SG|(^|\/)G($|\/)/.test(position))) buckets.G += 1;
+    if (positions.some((position) => /SF|PF|(^|\/)F($|\/)/.test(position))) buckets.F += 1;
+    if (positions.some((position) => /(^|\/)C($|\/)/.test(position))) buckets.C += 1;
+  });
+
+  const represented = Object.values(buckets).filter((count) => count > 0).length;
+  const counts = Object.values(buckets).filter((count) => count > 0);
+  if (!counts.length) return 60;
+  const max = Math.max(...counts);
+  const min = Math.min(...counts);
+  const spreadPenalty = Math.min(18, Math.max(0, max - min - 2) * 4);
+  return clamp(55 + represented * 12 - spreadPenalty, 45, 91);
+}
+
+function letterGrade(score) {
+  if (score >= 94) return 'A+';
+  if (score >= 90) return 'A';
+  if (score >= 87) return 'A-';
+  if (score >= 84) return 'B+';
+  if (score >= 80) return 'B';
+  if (score >= 77) return 'B-';
+  if (score >= 74) return 'C+';
+  if (score >= 70) return 'C';
+  if (score >= 67) return 'C-';
+  if (score >= 63) return 'D+';
+  if (score >= 60) return 'D';
+  return 'F';
+}
+
+function calculateDraftGrades() {
+  if (!state.draftPicks.length) return;
+
+  const teamRows = state.teams.map((team) => {
+    const picks = state.draftPicks
+      .filter((pick) => draftRosterId(pick) === team.rosterId)
+      .sort((a, b) => number(a.pick_no) - number(b.pick_no));
+
+    const ranked = picks.map((pick) => {
+      const pickNo = Math.max(1, number(pick.pick_no, 1));
+      const rank = draftPlayerRank(pick);
+      if (!rank) return null;
+      const delta = pickNo - rank;
+      const roundNo = Math.max(1, number(pick.round, 1));
+      const weight = roundNo <= 3 ? 1.35 : roundNo <= 6 ? 1 : 0.72;
+      const efficiency = clamp(50 + (delta / Math.max(8, pickNo)) * 58, 5, 98);
+      return { pick, pickNo, rank, delta, weight, efficiency };
+    }).filter(Boolean);
+
+    const weightedTotal = ranked.reduce((sum, row) => sum + row.efficiency * row.weight, 0);
+    const totalWeight = ranked.reduce((sum, row) => sum + row.weight, 0);
+    const valueScore = totalWeight ? weightedTotal / totalWeight : 55;
+    const balanceScore = positionalBalanceScore(picks);
+    const coverage = picks.length ? ranked.length / picks.length : 0;
+    const raw = valueScore * 0.82 + balanceScore * 0.18;
+    const best = [...ranked].sort((a, b) => b.delta - a.delta)[0] || null;
+    const reach = [...ranked].sort((a, b) => a.delta - b.delta)[0] || null;
+    return { team, picks, ranked, valueScore, balanceScore, coverage, raw, best, reach };
+  }).filter((row) => row.picks.length);
+
+  if (!teamRows.length) return;
+  const rawValues = teamRows.map((row) => row.raw);
+  const rawMin = Math.min(...rawValues);
+  const rawMax = Math.max(...rawValues);
+
+  state.draftGrades = teamRows.map((row) => {
+    const relative = rawMax === rawMin ? 0.5 : (row.raw - rawMin) / (rawMax - rawMin);
+    const score = clamp(69 + relative * 25, 60, 96);
+    const grade = letterGrade(score);
+    row.team.draftScore = score;
+    row.team.draftGrade = grade;
+    return { ...row, score, grade };
+  }).sort((a, b) => b.score - a.score);
+}
+
 function calculatePowerRankings() {
   const teams = state.teams;
   const ppg = teams.map((team) => team.weeklyScores.length ? team.weeklyScores.reduce((sum, item) => sum + item.points, 0) / team.weeklyScores.length : team.pf);
@@ -178,6 +373,7 @@ function calculatePowerRankings() {
   });
   const ppgNorm = normalizedScores(ppg);
   const recentNorm = normalizedScores(recent);
+  const weeks = state.completedWeeks?.length || 0;
 
   teams.forEach((team, index) => {
     const allPlayPct = team.allPlayGames ? team.allPlayWins / team.allPlayGames : team.winPct;
@@ -185,9 +381,17 @@ function calculatePowerRankings() {
     team.ppg = ppg[index];
     team.recentAvg = recent[index];
     team.allPlayPct = allPlayPct;
-    team.expectedWins = team.allPlayGames && state.completedWeeks?.length ? allPlayPct * state.completedWeeks.length : team.wins;
+    team.expectedWins = team.allPlayGames && weeks ? allPlayPct * weeks : team.wins;
     team.luck = team.wins - team.expectedWins;
-    team.power = 0.35 * winScore + 0.30 * ppgNorm[index] + 0.20 * (allPlayPct * 100) + 0.15 * recentNorm[index];
+
+    if (!weeks) {
+      team.power = team.draftScore ?? 50;
+      return;
+    }
+
+    const performance = 0.25 * winScore + 0.30 * ppgNorm[index] + 0.25 * (allPlayPct * 100) + 0.20 * recentNorm[index];
+    const draftWeight = team.draftScore === null ? 0 : clamp((5 - weeks) / 5, 0, 1) * 0.22;
+    team.power = performance * (1 - draftWeight) + (team.draftScore ?? performance) * draftWeight;
   });
 }
 
@@ -248,20 +452,56 @@ function renderStandings() {
 
 function renderPowerRankings() {
   const rankings = [...state.teams].sort((a, b) => b.power - a.power || b.pf - a.pf);
-  if (!state.completedWeeks?.length) {
-    el('powerRankings').innerHTML = '<div class="empty-state">Power rankings activate after the first scored matchup week.</div>';
-    return;
-  }
   if (!rankings.length) {
     el('powerRankings').innerHTML = '<div class="empty-state">No roster data yet.</div>';
     return;
   }
+
+  const preseason = !state.completedWeeks?.length;
+  if (preseason && !state.draftGrades.length) {
+    el('powerRankings').innerHTML = '<div class="empty-state">Preseason power rankings will appear after the draft. In-season rankings begin after scored matchups.</div>';
+    return;
+  }
+
   el('powerRankings').innerHTML = rankings.map((team, index) => {
-    const allPlay = team.allPlayGames ? `${Math.round(team.allPlayPct * 100)}% all-play` : 'waiting for matchups';
+    const detail = preseason
+      ? `Preseason · draft ${team.draftGrade || '—'}`
+      : `${team.wins}-${team.losses} · ${round(team.ppg || 0)} PPG · ${Math.round(team.allPlayPct * 100)}% all-play${team.draftGrade && state.completedWeeks.length < 5 ? ` · draft ${team.draftGrade}` : ''}`;
     return `<div class="ranking-row">
       <span class="rank-number">${index + 1}</span>
-      <div class="rank-copy"><span class="rank-name">${escapeHtml(team.name)}</span><span class="rank-detail">${team.wins}-${team.losses} · ${round(team.ppg || 0)} PPG · ${allPlay}</span></div>
+      <div class="rank-copy"><span class="rank-name">${escapeHtml(team.name)}</span><span class="rank-detail">${escapeHtml(detail)}</span></div>
       <span class="rank-score">${Math.round(team.power)}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderDraftGrades() {
+  const container = el('draftGrades');
+  if (!state.draft) {
+    container.innerHTML = '<div class="empty-state">No Sleeper draft is attached to this league yet.</div>';
+    return;
+  }
+  if (!state.draftPicks.length) {
+    const status = safeText(state.draft.status, 'not started').replaceAll('_', ' ');
+    container.innerHTML = `<div class="empty-state">Draft grades will populate when picks are available. Draft status: ${escapeHtml(status)}.</div>`;
+    return;
+  }
+  if (!state.draftGrades.length) {
+    container.innerHTML = '<div class="empty-state">Draft picks loaded, but there was not enough rank data to calculate grades.</div>';
+    return;
+  }
+
+  container.innerHTML = state.draftGrades.map((row, index) => {
+    const best = row.best ? `${draftPlayerName(row.best.pick)} at ${row.best.pickNo}` : 'No ranked steal available';
+    const reach = row.reach && row.reach.delta < -2 ? `${draftPlayerName(row.reach.pick)} at ${row.reach.pickNo}` : 'No major reach flagged';
+    const coverage = Math.round(row.coverage * 100);
+    return `<div class="ranking-row">
+      <span class="rank-number">${index + 1}</span>
+      <div class="rank-copy">
+        <span class="rank-name">${escapeHtml(row.team.name)}</span>
+        <span class="rank-detail">Best value: ${escapeHtml(best)} · ${escapeHtml(reach)} · ${coverage}% rank coverage</span>
+      </div>
+      <span class="rank-score">${escapeHtml(row.grade)}</span>
     </div>`;
   }).join('');
 }
@@ -369,7 +609,7 @@ function renderTeamGrid() {
       <div class="team-metrics">
         <div class="team-metric"><span class="team-metric-label">Record</span><span class="team-metric-value">${team.wins}-${team.losses}</span></div>
         <div class="team-metric"><span class="team-metric-label">PPG</span><span class="team-metric-value">${team.weeklyScores.length ? round(team.ppg) : '—'}</span></div>
-        <div class="team-metric"><span class="team-metric-label">Luck</span><span class="team-metric-value ${luckClass}">${luck === null ? '—' : `${luck > 0 ? '+' : ''}${round(luck, 2)}`}</span></div>
+        <div class="team-metric"><span class="team-metric-label">${state.completedWeeks.length ? 'Luck' : 'Draft'}</span><span class="team-metric-value ${luckClass}">${state.completedWeeks.length ? (luck === null ? '—' : `${luck > 0 ? '+' : ''}${round(luck, 2)}`) : (team.draftGrade || '—')}</span></div>
       </div>
       <div class="form-row">${form || '<span class="team-owner">Recent form will appear after games.</span>'}</div>
     </article>`;
@@ -396,11 +636,12 @@ async function loadDashboard() {
   setStatus('Connecting to Sleeper…');
   try {
     state.matchupWeeks.clear();
-    const [league, rosters, users, nbaState] = await Promise.all([
+    const [league, rosters, users, nbaState, drafts] = await Promise.all([
       api(`/league/${LEAGUE_ID}`),
       api(`/league/${LEAGUE_ID}/rosters`),
       api(`/league/${LEAGUE_ID}/users`),
       api('/state/nba').catch(() => null),
+      api(`/league/${LEAGUE_ID}/drafts`).catch(() => []),
     ]);
 
     if (!league || !Array.isArray(rosters) || !Array.isArray(users)) throw new Error('Sleeper returned incomplete league data.');
@@ -414,19 +655,26 @@ async function loadDashboard() {
     renderHeader();
     buildWeekSelect();
     el('dashboard').classList.remove('hidden');
-    setStatus('League loaded. Calculating matchup analytics…');
+    setStatus('League loaded. Calculating draft and matchup analytics…');
 
-    await loadHistoricalMatchups();
+    await Promise.all([
+      loadDraftData(drafts),
+      loadHistoricalMatchups(),
+    ]);
     enrichTeamsFromMatchups();
     calculatePowerRankings();
     renderSummary();
     renderStandings();
     renderPowerRankings();
+    renderDraftGrades();
     renderSuperlatives();
     renderTeamGrid();
     await renderMatchups(Math.max(state.currentWeek, 1));
 
-    setStatus(`Updated from Sleeper${state.completedWeeks?.length ? ` · ${state.completedWeeks.length} scored weeks analyzed` : ''}.`, 'success');
+    const notes = [];
+    if (state.draftPicks.length) notes.push(`${state.draftPicks.length} draft picks graded`);
+    if (state.completedWeeks?.length) notes.push(`${state.completedWeeks.length} scored weeks analyzed`);
+    setStatus(`Updated from Sleeper${notes.length ? ` · ${notes.join(' · ')}` : ''}.`, 'success');
   } catch (error) {
     console.error(error);
     setStatus(`Could not load this league from Sleeper. ${error.message}`, 'error');
@@ -438,5 +686,6 @@ async function loadDashboard() {
 el('refreshButton').addEventListener('click', loadDashboard);
 el('weekSelect').addEventListener('change', (event) => renderMatchups(number(event.target.value, 1)));
 el('powerInfoButton').addEventListener('click', () => el('powerInfo').classList.toggle('hidden'));
+el('draftInfoButton').addEventListener('click', () => el('draftInfo').classList.toggle('hidden'));
 
 loadDashboard();
