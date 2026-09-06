@@ -2,10 +2,10 @@ const B = window.Babashop;
 const $ = (id) => document.getElementById(id);
 
 function setStatus(message, type = '') {
-  const el = $('statusBanner');
-  if (!el) return;
-  el.textContent = message;
-  el.className = `status-banner${type ? ` ${type}` : ''}`;
+  const node = $('statusBanner');
+  if (!node) return;
+  node.textContent = message;
+  node.className = `status-banner${type ? ` ${type}` : ''}`;
 }
 
 function teamCell(team, link = true) {
@@ -88,6 +88,15 @@ function renderPower() {
     </a>`).join('');
 }
 
+function draftConcernText(row) {
+  if (!row.concern) return '—';
+  const pick = row.concern.pick;
+  const name = B.draftPlayerName(pick);
+  if (!row.concern.current) return `${name} · ${row.concern.status?.label || 'inactive'}`;
+  if (row.concern.rank) return `${name} (${Math.round(row.concern.delta)})`;
+  return `${name} · no usable rank`;
+}
+
 function renderDraft() {
   renderLeagueHeader();
   if (!B.state.draftGrades.length) {
@@ -95,13 +104,132 @@ function renderDraft() {
     return;
   }
   $('draftGrades').innerHTML = B.state.draftGrades.map((row, index) => {
-    const best = row.best ? `${B.draftPlayerName(row.best.pick)} (+${Math.round(row.best.delta)})` : '—';
-    const reach = row.reach ? `${B.draftPlayerName(row.reach.pick)} (${Math.round(row.reach.delta)})` : '—';
+    const best = row.best ? `${B.draftPlayerName(row.best.pick)} (+${Math.round(row.best.delta)})` : 'No verified value pick';
+    const concern = draftConcernText(row);
+    const inactive = row.inactive?.length ? ` · ${row.inactive.length} inactive/stale pick${row.inactive.length === 1 ? '' : 's'}` : '';
     return `<a class="draft-card" href="${B.teamUrl(row.team)}">
       <div class="draft-rank">${index + 1}</div>
-      <div class="draft-main"><strong>${B.escapeHtml(row.team.name)}</strong><span>${B.escapeHtml(row.team.owner)}</span><small>Best value: ${B.escapeHtml(best)} · Biggest reach: ${B.escapeHtml(reach)}</small></div>
+      <div class="draft-main"><strong>${B.escapeHtml(row.team.name)}</strong><span>${B.escapeHtml(row.team.owner)}</span><small>Best value: ${B.escapeHtml(best)} · Concern: ${B.escapeHtml(concern)}${B.escapeHtml(inactive)}</small></div>
       <div class="draft-grade"><strong>${row.grade}</strong><span>${Math.round(row.score)}</span></div>
     </a>`;
+  }).join('');
+}
+
+function renderSchedule() {
+  renderLeagueHeader();
+  const teams = B.scheduleRankings();
+  if (!teams.length) {
+    $('scheduleRankings').innerHTML = '<div class="empty-state">Sleeper has not exposed the league schedule yet.</div>';
+    return;
+  }
+  const toughest = teams[0];
+  const easiest = teams[teams.length - 1];
+  $('scheduleSummary').innerHTML = `
+    <div class="mini-stat"><span>Toughest</span><strong>${B.escapeHtml(toughest.name)}</strong><small>${B.round(toughest.schedule.overall)} avg opponent power</small></div>
+    <div class="mini-stat"><span>Easiest</span><strong>${B.escapeHtml(easiest.name)}</strong><small>${B.round(easiest.schedule.overall)} avg opponent power</small></div>
+    <div class="mini-stat"><span>Scheduled weeks</span><strong>${Math.max(...teams.map((t) => t.schedule.games.length))}</strong><small>regular-season matchup data found</small></div>`;
+  $('scheduleRankings').innerHTML = teams.map((team, index) => {
+    const s = team.schedule;
+    const played = s.played == null ? '—' : B.round(s.played);
+    const remaining = s.remainingStrength == null ? '—' : B.round(s.remainingStrength);
+    return `<a class="schedule-row" href="${B.teamUrl(team)}">
+      <span class="rank-number">${index + 1}</span>
+      <div class="schedule-main"><strong>${B.escapeHtml(team.name)}</strong><small>${s.completed.length} played · ${s.remaining.length} remaining</small></div>
+      <div class="schedule-metric"><span>Overall</span><strong>${B.round(s.overall)}</strong></div>
+      <div class="schedule-metric"><span>Played</span><strong>${played}</strong></div>
+      <div class="schedule-metric"><span>Remaining</span><strong>${remaining}</strong></div>
+    </a>`;
+  }).join('');
+}
+
+function formatDate(timestamp) {
+  if (!timestamp) return 'Unknown date';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return 'Unknown date';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function playerNames(ids) {
+  return ids.length ? ids.map((id) => B.playerNameFromId(id)).join(', ') : 'Nothing';
+}
+
+function renderPartyAssets(party) {
+  const received = [];
+  const sent = [];
+  if (party.receivedPlayers.length) received.push(playerNames(party.receivedPlayers));
+  if (party.receivedPicks.length) received.push(party.receivedPicks.map((pick) => `${pick.season || ''} R${pick.round || '?'}`).join(', '));
+  if (party.sentPlayers.length) sent.push(playerNames(party.sentPlayers));
+  if (party.sentPicks.length) sent.push(party.sentPicks.map((pick) => `${pick.season || ''} R${pick.round || '?'}`).join(', '));
+  return { received: received.join(' + ') || 'Nothing', sent: sent.join(' + ') || 'Nothing' };
+}
+
+function transactionTypeLabel(type) {
+  if (type === 'trade') return 'Trade';
+  if (type === 'waiver') return 'Waiver';
+  return 'Free agent';
+}
+
+function renderTransactions() {
+  renderLeagueHeader();
+  const rows = B.state.transactionGrades;
+  if (!rows.length) {
+    $('transactionList').innerHTML = '<div class="empty-state">No completed trades or roster moves were found in the available Sleeper transaction rounds.</div>';
+    return;
+  }
+  const trades = rows.filter((row) => row.type === 'trade').length;
+  const moves = rows.length - trades;
+  $('transactionSummary').innerHTML = `
+    <div class="mini-stat"><span>Trades</span><strong>${trades}</strong><small>completed deals found</small></div>
+    <div class="mini-stat"><span>Waiver / FA</span><strong>${moves}</strong><small>graded roster moves</small></div>
+    <div class="mini-stat"><span>Grade basis</span><strong>Asset value</strong><small>production → draft capital → low-confidence fallback</small></div>`;
+  $('transactionList').innerHTML = rows.slice(0, 80).map((row) => `
+    <article class="transaction-card">
+      <div class="transaction-head"><div><span class="pill">${transactionTypeLabel(row.type)}</span><strong>${formatDate(row.created)}</strong></div></div>
+      <div class="transaction-parties">${row.parties.map((party) => {
+        const assets = renderPartyAssets(party);
+        return `<a class="transaction-party" href="${party.team ? B.teamUrl(party.team) : '#'}">
+          <div class="transaction-party-main"><strong>${B.escapeHtml(party.team?.name || `Team ${party.rosterId}`)}</strong><small>Gets: ${B.escapeHtml(assets.received)}</small><small>Gives: ${B.escapeHtml(assets.sent)}</small></div>
+          <div class="grade-chip"><strong>${party.grade}</strong><span>${Math.round(party.score)}</span></div>
+        </a>`;
+      }).join('')}</div>
+    </article>`).join('');
+}
+
+function renderTeamSchedule(team) {
+  const s = team.schedule;
+  if (!s || s.overall == null) return '<div class="empty-state">Schedule data is not available yet.</div>';
+  const rank = B.scheduleRankings().findIndex((t) => t.rosterId === team.rosterId) + 1;
+  const next = s.remaining.slice(0, 3).map((game) => `W${game.week} ${game.opponent.name}`).join(' · ');
+  return `
+    <div class="mini-stat"><span>Strength rank</span><strong>#${rank}</strong><small>#1 = toughest schedule</small></div>
+    <div class="mini-stat"><span>Avg opponent</span><strong>${B.round(s.overall)}</strong><small>opponent power score</small></div>
+    <div class="mini-stat"><span>Remaining</span><strong>${s.remainingStrength == null ? '—' : B.round(s.remainingStrength)}</strong><small>${B.escapeHtml(next || 'No remaining matchups found')}</small></div>`;
+}
+
+function renderTeamMoves(team) {
+  const rows = B.state.transactionGrades
+    .flatMap((row) => row.parties.filter((party) => party.rosterId === team.rosterId).map((party) => ({ row, party })))
+    .slice(0, 8);
+  if (!rows.length) return '<div class="empty-state">No completed roster moves found yet.</div>';
+  return rows.map(({ row, party }) => {
+    const assets = renderPartyAssets(party);
+    return `<div class="move-row"><div><strong>${transactionTypeLabel(row.type)} · ${formatDate(row.created)}</strong><small>Gets: ${B.escapeHtml(assets.received)}</small><small>Gives: ${B.escapeHtml(assets.sent)}</small></div><div class="grade-chip"><strong>${party.grade}</strong><span>${Math.round(party.score)}</span></div></div>`;
+  }).join('');
+}
+
+function renderPlayerGrades(team) {
+  const players = Array.isArray(team.roster?.players) ? team.roster.players : [];
+  if (!players.length) return '<div class="empty-state">No roster players found.</div>';
+  const rows = players.map((id) => ({ id, meta: B.playerMeta(id), info: B.playerGradeInfo(id) }))
+    .sort((a, b) => b.info.score - a.info.score);
+  return rows.map(({ id, meta, info }) => {
+    const pos = Array.isArray(meta.fantasy_positions) ? meta.fantasy_positions.join('/') : meta.position || '';
+    const subtitle = [pos, meta.team, info.basis].filter(Boolean).join(' · ');
+    const inactive = !info.status.current ? ' player-grade-inactive' : '';
+    return `<div class="player-grade-row${inactive}">
+      <div class="player-grade-main"><strong>${B.escapeHtml(B.playerNameFromId(id))}</strong><span>${B.escapeHtml(subtitle)}</span></div>
+      <div class="grade-chip"><strong>${info.grade}</strong><span>${Math.round(info.score)}</span></div>
+    </div>`;
   }).join('');
 }
 
@@ -121,44 +249,53 @@ function renderTeam() {
   $('teamPower').textContent = `#${rank}`;
   $('teamPPG').textContent = team.weeklyScores.length ? B.round(team.ppg) : '—';
   $('teamDraft').textContent = team.draftGrade || '—';
+
   const form = team.recentForm.slice(-5);
   $('teamForm').innerHTML = form.length ? form.map((item) => {
     const opp = B.teamByRosterId(item.opponentId);
     return `<div class="form-game"><span class="form-badge ${item.result === 'W' ? 'win' : item.result === 'L' ? 'loss' : 'tie'}">${item.result}</span><div><strong>Week ${item.week} vs ${B.escapeHtml(opp?.name || 'Opponent')}</strong><small>${B.round(item.points)} - ${B.round(item.opponentPoints)}</small></div></div>`;
   }).join('') : '<div class="empty-state">No completed matchups yet.</div>';
+
   const maxScore = Math.max(...team.weeklyScores.map((x) => x.points), 1);
   $('scoreTrend').innerHTML = team.weeklyScores.length ? team.weeklyScores.map((item) => `<div class="score-bar-row"><span>W${item.week}</span><div class="score-bar-track"><div class="score-bar" style="width:${Math.max(4, (item.points / maxScore) * 100)}%"></div></div><strong>${B.round(item.points)}</strong></div>`).join('') : '<div class="empty-state">Weekly scoring appears once games start.</div>';
+
   $('teamAnalytics').innerHTML = `
     <div class="mini-stat"><span>All-play</span><strong>${team.allPlayGames ? `${Math.round(team.allPlayPct * 100)}%` : '—'}</strong><small>How often this score beats the league</small></div>
     <div class="mini-stat"><span>Expected wins</span><strong>${team.allPlayGames ? B.round(team.expectedWins, 2) : '—'}</strong><small>Based on all-play performance</small></div>
     <div class="mini-stat"><span>Luck</span><strong class="${team.luck > 0.15 ? 'diff-positive' : team.luck < -0.15 ? 'diff-negative' : ''}">${team.allPlayGames ? `${team.luck > 0 ? '+' : ''}${B.round(team.luck, 2)}` : '—'}</strong><small>Actual wins minus expected wins</small></div>`;
+
+  $('scheduleReport').innerHTML = renderTeamSchedule(team);
+  $('playerGrades').innerHTML = renderPlayerGrades(team);
+  $('teamMoves').innerHTML = renderTeamMoves(team);
+
   const draftRow = B.state.draftGrades.find((row) => row.team.rosterId === team.rosterId);
   if (draftRow) {
+    const concern = draftConcernText(draftRow);
     $('draftReport').innerHTML = `
       <div class="mini-stat"><span>Grade</span><strong>${draftRow.grade}</strong><small>${Math.round(draftRow.score)} / 100</small></div>
-      <div class="mini-stat"><span>Best value</span><strong>${draftRow.best ? B.escapeHtml(B.draftPlayerName(draftRow.best.pick)) : '—'}</strong><small>${draftRow.best ? `Pick ${draftRow.best.pickNo}, rank ${draftRow.best.rank}` : 'No rank data'}</small></div>
-      <div class="mini-stat"><span>Biggest reach</span><strong>${draftRow.reach ? B.escapeHtml(B.draftPlayerName(draftRow.reach.pick)) : '—'}</strong><small>${draftRow.reach ? `Pick ${draftRow.reach.pickNo}, rank ${draftRow.reach.rank}` : 'No rank data'}</small></div>`;
+      <div class="mini-stat"><span>Best verified value</span><strong>${draftRow.best ? B.escapeHtml(B.draftPlayerName(draftRow.best.pick)) : '—'}</strong><small>${draftRow.best ? `Pick ${draftRow.best.pickNo}, rank ${draftRow.best.rank}` : 'No active ranked value pick'}</small></div>
+      <div class="mini-stat"><span>Biggest concern</span><strong>${B.escapeHtml(concern)}</strong><small>${draftRow.inactive?.length ? `${draftRow.inactive.length} inactive/stale pick${draftRow.inactive.length === 1 ? '' : 's'} penalized` : 'Active-player reach signal'}</small></div>`;
   } else {
     $('draftReport').innerHTML = '<div class="empty-state">No draft report available.</div>';
   }
-  const players = Array.isArray(team.roster?.players) ? team.roster.players : [];
-  $('rosterList').innerHTML = players.length ? players.map((id) => {
-    const meta = B.playerMeta(id);
-    const pos = Array.isArray(meta.fantasy_positions) ? meta.fantasy_positions.join('/') : meta.position || '';
-    return `<div class="roster-row"><strong>${B.escapeHtml(B.playerNameFromId(id))}</strong><span>${B.escapeHtml([pos, meta.team].filter(Boolean).join(' · '))}</span></div>`;
-  }).join('') : '<div class="empty-state">No roster players found.</div>';
 }
 
 async function boot() {
   setStatus('Loading Sleeper data…');
   try {
     const page = document.body.dataset.page;
-    await B.loadData({ needPlayers: page === 'team' });
+    await B.loadData({
+      needPlayers: ['team', 'draft', 'transactions'].includes(page),
+      needSchedule: ['team', 'schedule'].includes(page),
+      needTransactions: ['team', 'transactions'].includes(page),
+    });
     document.body.classList.remove('loading');
     if (page === 'home') renderHome();
     if (page === 'standings') renderStandings();
     if (page === 'power') renderPower();
     if (page === 'draft') renderDraft();
+    if (page === 'schedule') renderSchedule();
+    if (page === 'transactions') renderTransactions();
     if (page === 'team') renderTeam();
     setStatus(`Updated from Sleeper · cache ${B.CACHE_VERSION}`, 'success');
   } catch (error) {
