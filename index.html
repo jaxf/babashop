@@ -88,9 +88,21 @@
             </div>
             <button id="powerInfoButton" class="icon-button" type="button" aria-label="How power rankings work">?</button>
           </div>
-          <p id="powerInfo" class="panel-note hidden">Blends record, scoring, all-play performance and recent form. It becomes more useful after several completed matchup weeks.</p>
+          <p id="powerInfo" class="panel-note hidden">Preseason rankings use the draft grade. Once games start, the model shifts to record, scoring, all-play performance and recent form; draft strength fades out over the first few scored weeks.</p>
           <div id="powerRankings" class="ranking-list"></div>
         </article>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow">Draft</div>
+            <h2>Draft grades</h2>
+          </div>
+          <button id="draftInfoButton" class="icon-button" type="button" aria-label="How draft grades work">?</button>
+        </div>
+        <p id="draftInfo" class="panel-note hidden">League-relative grades based mostly on draft value versus Sleeper's player-rank signal, with a smaller positional-balance adjustment. Early reaches count more than late reaches. Picks without usable rank data are excluded instead of guessed.</p>
+        <div id="draftGrades" class="ranking-list"></div>
       </section>
 
       <section class="panel-grid">
