@@ -171,9 +171,13 @@ function transactionTypeLabel(type) {
 
 function renderTransactions() {
   renderLeagueHeader();
-  const rows = B.state.transactionGrades;
+  const type = $('moveType')?.value || 'all';
+  const team = $('moveTeam')?.value || 'all';
+  const query = ($('moveSearch')?.value || '').toLowerCase();
+  const rows = B.state.transactionGrades.filter(row => (type === 'all' || row.type === type) && (team === 'all' || row.parties.some(p => String(p.rosterId) === team)) && (!query || row.parties.some(p => [p.team?.name, playerNames(p.receivedPlayers), playerNames(p.sentPlayers)].join(' ').toLowerCase().includes(query))));
   if (!rows.length) {
-    $('transactionList').innerHTML = '<div class="empty-state">No completed trades or roster moves were found in the available Sleeper transaction rounds.</div>';
+    $('transactionSummary').innerHTML = '';
+    $('transactionList').innerHTML = '<div class="empty-state">No moves match this view. Try another filter, or check back after your next move.</div>';
     return;
   }
   const trades = rows.filter((row) => row.type === 'trade').length;
@@ -181,15 +185,15 @@ function renderTransactions() {
   $('transactionSummary').innerHTML = `
     <div class="mini-stat"><span>Trades</span><strong>${trades}</strong><small>completed deals found</small></div>
     <div class="mini-stat"><span>Waiver / FA</span><strong>${moves}</strong><small>graded roster moves</small></div>
-    <div class="mini-stat"><span>Grade basis</span><strong>Asset value</strong><small>production → draft capital → low-confidence fallback</small></div>`;
-  $('transactionList').innerHTML = rows.slice(0, 80).map((row) => `
+    <div class="mini-stat"><span>Grade basis</span><strong>Value above replacement</strong><small>Current-value estimate · tap method below</small></div>`;
+  $('transactionList').innerHTML = rows.map((row) => `
     <article class="transaction-card">
       <div class="transaction-head"><div><span class="pill">${transactionTypeLabel(row.type)}</span><strong>${formatDate(row.created)}</strong></div></div>
       <div class="transaction-parties">${row.parties.map((party) => {
         const assets = renderPartyAssets(party);
         return `<a class="transaction-party" href="${party.team ? B.teamUrl(party.team) : '#'}">
-          <div class="transaction-party-main"><strong>${B.escapeHtml(party.team?.name || `Team ${party.rosterId}`)}</strong><small>Gets: ${B.escapeHtml(assets.received)}</small><small>Gives: ${B.escapeHtml(assets.sent)}</small></div>
-          <div class="grade-chip"><strong>${party.grade}</strong><span>${Math.round(party.score)}</span></div>
+          <div class="transaction-party-main"><strong>${B.escapeHtml(party.team?.name || `Team ${party.rosterId}`)}</strong><small>Gets: ${B.escapeHtml(assets.received)}</small><small>Gives: ${B.escapeHtml(assets.sent)}</small><small>${B.escapeHtml(party.explanation || "")} ${B.escapeHtml(party.confidence || "Low")} confidence.</small></div>
+          <div class="grade-chip"><strong>${party.grade}</strong><span>${party.grade === "—" ? "No grade" : Math.round(party.score)}</span></div>
         </a>`;
       }).join('')}</div>
     </article>`).join('');
@@ -213,7 +217,7 @@ function renderTeamMoves(team) {
   if (!rows.length) return '<div class="empty-state">No completed roster moves found yet.</div>';
   return rows.map(({ row, party }) => {
     const assets = renderPartyAssets(party);
-    return `<div class="move-row"><div><strong>${transactionTypeLabel(row.type)} · ${formatDate(row.created)}</strong><small>Gets: ${B.escapeHtml(assets.received)}</small><small>Gives: ${B.escapeHtml(assets.sent)}</small></div><div class="grade-chip"><strong>${party.grade}</strong><span>${Math.round(party.score)}</span></div></div>`;
+    return `<div class="move-row"><div><strong>${transactionTypeLabel(row.type)} · ${formatDate(row.created)}</strong><small>Gets: ${B.escapeHtml(assets.received)}</small><small>Gives: ${B.escapeHtml(assets.sent)}</small><small>${B.escapeHtml(party.explanation || "")} ${B.escapeHtml(party.confidence || "Low")} confidence.</small></div><div class="grade-chip"><strong>${party.grade}</strong><span>${party.grade === "—" ? "No grade" : Math.round(party.score)}</span></div></div>`;
   }).join('');
 }
 
@@ -297,10 +301,13 @@ async function boot() {
     if (page === 'schedule') renderSchedule();
     if (page === 'transactions') renderTransactions();
     if (page === 'team') renderTeam();
-    setStatus(`Updated from Sleeper · cache ${B.CACHE_VERSION}`, 'success');
+    window.setupExperience?.();
+    setStatus(`Connected to Sleeper · ${B.state.league?.season || ''} season · Updated ${new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}`, 'success');
   } catch (error) {
+    document.body.classList.remove('loading');
     console.error(error);
-    setStatus(`Could not load Sleeper data. ${error.message}`, 'error');
+    setStatus(`The league feed is unavailable. Please try again.`, 'error');
+    const retry = document.createElement('button'); retry.className='quiet retry'; retry.textContent='Try again'; retry.onclick=boot; $('statusBanner').append(retry);
   }
 }
 

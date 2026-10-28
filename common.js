@@ -1,6 +1,6 @@
 const LEAGUE_ID = '1401342003886714880';
 const API = 'https://api.sleeper.app/v1';
-const CACHE_VERSION = '20260906-04';
+const CACHE_VERSION = '20261028-court';
 
 const NBA_TEAMS = new Set([
   'ATL','BOS','BKN','CHA','CHI','CLE','DAL','DEN','DET','GSW','HOU','IND','LAC','LAL','MEM',
@@ -43,7 +43,7 @@ function avatarUrl(avatarId) {
 }
 
 async function api(path) {
-  const response = await fetch(`${API}${path}`, { cache: 'no-store' });
+  const response = await fetch(`${API}${path}`, { cache: 'no-store', signal: AbortSignal.timeout(20000) });
   if (!response.ok) throw new Error(`Sleeper returned ${response.status} for ${path}`);
   return response.json();
 }
@@ -108,7 +108,7 @@ function getCurrentWeek(league, nbaState) {
   if (status === 'pre_draft' || status === 'drafting') return 0;
   const leagueWeek = Math.max(number(league?.settings?.leg, 0), number(league?.settings?.week, 0));
   if (leagueWeek > 0) return leagueWeek;
-  if (league?.season && nbaState?.season && String(league.season) !== String(nbaState.season)) return 0;
+  if (league?.season && nbaState?.season && String(league.season) !== String(nbaState.season)) return league.status === 'complete' ? Math.min(30, number(league.settings?.num_weeks, 24)) : 0;
   return Math.max(number(nbaState?.week, 0), number(nbaState?.leg, 0));
 }
 
@@ -160,8 +160,9 @@ function addPlayerFantasyPoints(matchup, week) {
   const points = matchup?.players_points;
   if (!points || typeof points !== 'object') return;
   Object.entries(points).forEach(([playerId, rawPoints]) => {
-    if (!Number.isFinite(Number(rawPoints))) return;
+    if (rawPoints == null || !Number.isFinite(Number(rawPoints))) return;
     const current = state.playerStats.get(String(playerId)) || { total: 0, weeks: 0, weekly: [] };
+    if (current.weekly.some(row => row.week === week)) return;
     current.total += number(rawPoints);
     current.weeks += 1;
     current.weekly.push({ week, points: number(rawPoints) });
@@ -179,6 +180,7 @@ function enrichTeamsFromMatchups() {
       .filter((matchup) => matchup && matchup.roster_id !== undefined && Number.isFinite(Number(matchup.points)))
       .map((matchup) => ({ rosterId: number(matchup.roster_id), points: number(matchup.points), matchupId: matchup.matchup_id, raw: matchup }));
     if (scored.length < 2 || scored.every((item) => item.points === 0)) continue;
+    if (week >= state.currentWeek && state.league?.status !== 'complete') continue;
     completedWeeks.push(week);
 
     scored.forEach((item) => {
@@ -616,33 +618,10 @@ function gradeTransactionParty(txn, rosterId, type) {
   const receivedPicks = draftPicks.filter((pick) => number(pick.owner_id || pick.roster_id) === number(rosterId));
   const sentPicks = draftPicks.filter((pick) => number(pick.previous_owner_id) === number(rosterId) && number(pick.owner_id || pick.roster_id) !== number(rosterId));
 
-  const receivedValue = receivedPlayers.reduce((sum, id) => sum + playerAssetValue(id), 0) + receivedPicks.reduce((sum, pick) => sum + draftPickAssetValue(pick), 0);
-  const sentValue = sentPlayers.reduce((sum, id) => sum + playerAssetValue(id), 0) + sentPicks.reduce((sum, pick) => sum + draftPickAssetValue(pick), 0);
-  const meaningful = receivedPlayers.length + sentPlayers.length + receivedPicks.length + sentPicks.length > 0;
-
-  let score = 72;
-  if (!meaningful) score = 60;
-  else if (type === 'trade') {
-    const denominator = Math.max(24, receivedValue + sentValue);
-    score = clamp(82 + ((receivedValue - sentValue) / denominator) * 56, 48, 97);
-  } else {
-    const avgAdded = receivedPlayers.length ? average(receivedPlayers.map((id) => playerGradeInfo(id).score)) : 55;
-    const avgDropped = sentPlayers.length ? average(sentPlayers.map((id) => playerGradeInfo(id).score)) : 50;
-    score = clamp(74 + (avgAdded - avgDropped) * 0.45 + Math.max(0, avgAdded - 72) * 0.18, 50, 96);
-  }
-
-  return {
-    rosterId: number(rosterId),
-    team: teamByRosterId(rosterId),
-    receivedPlayers,
-    sentPlayers,
-    receivedPicks,
-    sentPicks,
-    receivedValue,
-    sentValue,
-    score,
-    grade: letterGrade(score),
-  };
+  const transfers = Array.isArray(txn.waiver_budget) ? txn.waiver_budget : [];
+  const faab = transfers.reduce((sum, item) => sum + (number(item.receiver) === number(rosterId) ? number(item.amount) : 0) - (number(item.sender) === number(rosterId) ? number(item.amount) : 0), 0);
+  const result = window.Babashop.assessMove(receivedPlayers, sentPlayers, { incomingPicks: receivedPicks, outgoingPicks: sentPicks, faab, bid: type === 'waiver' ? number(txn.settings?.waiver_bid) : 0 });
+  return { rosterId: number(rosterId), team: teamByRosterId(rosterId), receivedPlayers, sentPlayers, receivedPicks, sentPicks, ...result };
 }
 
 function calculateTransactionGrades() {
